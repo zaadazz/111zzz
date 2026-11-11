@@ -11,7 +11,7 @@ local CoreGui = game:GetService("CoreGui")
 local TargetFOV = 110
 local DefaultFOV = 70
 local MaxESPDistance = 250
-local MaxActiveHighlights = 25 -- Лимит одновременных подсветок для защиты от лагов движка
+local MaxActiveHighlights = 22 -- Оптимальный лимит для максимального FPS
 
 local States = {
     Fov = false,
@@ -24,7 +24,10 @@ local ESPConfig = {
     Survivors = { Enabled = true, Color = Color3.fromRGB(50, 220, 100) },
     Pallets = { Enabled = true, Color = Color3.fromRGB(255, 215, 0) },
     Windows = { Enabled = true, Color = Color3.fromRGB(0, 190, 255) },
-    Generators = { Enabled = true, Color = Color3.fromRGB(180, 90, 255) }
+    Generators = { Enabled = true, Color = Color3.fromRGB(180, 90, 255) },
+    BrokenGen = { Enabled = true, Color = Color3.fromRGB(255, 115, 25) },
+    Traps = { Enabled = true, Color = Color3.fromRGB(255, 50, 150) },
+    Zombies = { Enabled = true, Color = Color3.fromRGB(130, 255, 60) }
 }
 
 local OrigLighting = {
@@ -91,7 +94,7 @@ local function SwitchPage(targetPage)
     ColorPage.Visible = (targetPage == ColorPage)
 
     if targetPage == ESPPage then
-        MainFrame.Size = UDim2.new(0, 170, 0, 265)
+        MainFrame.Size = UDim2.new(0, 170, 0, 352)
     elseif targetPage == ColorPage then
         MainFrame.Size = UDim2.new(0, 170, 0, 225)
     else
@@ -299,9 +302,8 @@ local KnobStroke = Instance.new("UIStroke")
 KnobStroke.Color = Color3.fromRGB(20, 20, 20)
 KnobStroke.Thickness = 1.5
 KnobStroke.Parent = ValKnob
-
 local function ApplySelectedHSV()
-    local finalColor = Color3.fromHSV(CurrentHue, CurrentSat, CurrentVal)
+local finalColor = Color3.fromHSV(CurrentHue, CurrentSat, CurrentVal)
 ValGradient.Color = ColorSequence.new(Color3.fromRGB(0, 0, 0), Color3.fromHSV(CurrentHue, CurrentSat, 1))
 WheelImage.ImageColor3 = Color3.fromHSV(0, 0, CurrentVal)
 if ActiveColorKey and ESPConfig[ActiveColorKey] then
@@ -437,9 +439,12 @@ CreateESPOption("Survivors", "Survivors", 63)
 CreateESPOption("Pallets", "Pallets", 92)
 CreateESPOption("Windows", "Windows", 121)
 CreateESPOption("Generators", "Generators", 150)
+CreateESPOption("BrokenGen", "Broken Gen", 179)
+CreateESPOption("Traps", "Traps", 208)
+CreateESPOption("Zombies", "Zombies", 237)
 local DistLabel = Instance.new("TextLabel")
 DistLabel.Size = UDim2.new(1, 0, 0, 16)
-DistLabel.Position = UDim2.new(0, 0, 0, 180)
+DistLabel.Position = UDim2.new(0, 0, 0, 267)
 DistLabel.BackgroundTransparency = 1
 DistLabel.Text = "Object Dist: " .. tostring(MaxESPDistance)
 DistLabel.TextColor3 = Color3.fromRGB(215, 215, 215)
@@ -448,7 +453,7 @@ DistLabel.TextSize = 11
 DistLabel.Parent = ESPPage
 local DistSliderBg = Instance.new("TextButton")
 DistSliderBg.Size = UDim2.new(0, 146, 0, 8)
-DistSliderBg.Position = UDim2.new(0, 12, 0, 200)
+DistSliderBg.Position = UDim2.new(0, 12, 0, 287)
 DistSliderBg.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
 DistSliderBg.Text = ""
 DistSliderBg.AutoButtonColor = false
@@ -506,7 +511,7 @@ end
 end)
 local ESPBackBtn = Instance.new("TextButton")
 ESPBackBtn.Size = UDim2.new(0, 146, 0, 26)
-ESPBackBtn.Position = UDim2.new(0, 12, 0, 224)
+ESPBackBtn.Position = UDim2.new(0, 12, 0, 311)
 ESPBackBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
 ESPBackBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
 ESPBackBtn.Text = "< Back"
@@ -521,9 +526,8 @@ ESPBackBtn.MouseButton1Click:Connect(function()
 SwitchPage(HomePage)
 end)
 -- ==========================================
--- ОПТИМИЗИРОВАННАЯ ЛОГИКА ESP (БЕЗ ФРИЗОВ)
+-- УЛЬТРА-ОПТИМИЗИРОВАННАЯ ЛОГИКА ESP (СОБЫТИЙНАЯ)
 -- ==========================================
--- Структура кэша: CachedMapObjects[target] = { Category = string, Position = Vector3 }
 local CachedMapObjects = {}
 local function IsInLobby(obj)
 local current = obj
@@ -549,18 +553,16 @@ end
 end
 return false
 end
-local function ComputeTargetPosition(target)
+-- Мгновенное получение позиции без тяжелых вычислений
+local function FastGetPosition(target, cachedRoot)
+if cachedRoot and cachedRoot.Parent then
+return cachedRoot.Position
+end
 if target:IsA("BasePart") then
 return target.Position
 elseif target:IsA("Model") then
 if target.PrimaryPart then
 return target.PrimaryPart.Position
-end
-local ok, cf = pcall(function()
-return target:GetBoundingBox()
-end)
-if ok and cf then
-return cf.Position
 end
 local part = target:FindFirstChildWhichIsA("BasePart", true)
 if part then
@@ -570,7 +572,6 @@ end
 return nil
 end
 local function ClassifyObject(obj)
-if not (obj:IsA("Model") or obj:IsA("BasePart")) then return nil end
 if Players:GetPlayerFromCharacter(obj) or Players:GetPlayerFromCharacter(obj.Parent) then
 return nil
 end
@@ -578,7 +579,13 @@ if IsInLobby(obj) then
 return nil
 end
 local name = string.lower(obj.Name)
-if string.find(name, "pallet") then
+if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+return "Zombies"
+elseif string.find(name, "zombie") or string.find(name, "plague") or string.find(name, "minion") or string.find(name, "infected") then
+return "Zombies"
+elseif string.find(name, "trap") or string.find(name, "snare") or string.find(name, "kapkan") then
+return "Traps"
+elseif string.find(name, "pallet") then
 return "Pallets"
 elseif string.find(name, "vault") or (string.find(name, "window") and IsInteractableVault(obj)) then
 return "Windows"
@@ -587,33 +594,107 @@ return "Generators"
 end
 return nil
 end
+-- Вычисление статуса генератора только при изменении его свойств (0 нагрузки в цикле!)
+local function EvaluateGeneratorState(target)
+local attrs = target:GetAttributes()
+for k, v in pairs(attrs) do
+local key = string.lower(tostring(k))
+if (string.find(key, "complet") or string.find(key, "finish") or string.find(key, "repaired") or string.find(key, "done")) and v == true then
+return "Completed"
+end
+if (string.find(key, "progress") or string.find(key, "percent")) and type(v) == "number" and v >= 100 then
+return "Completed"
+end
+if (string.find(key, "broken") or string.find(key, "damag") or string.find(key, "regress")) and v == true then
+return "BrokenGen"
+end
+end
+local hasPrompt = false
+local anyPromptEnabled = false
+for _, desc in ipairs(target:GetDescendants()) do
+if desc:IsA("ProximityPrompt") then
+hasPrompt = true
+if desc.Enabled then anyPromptEnabled = true end
+elseif desc:IsA("BoolValue") then
+local n = string.lower(desc.Name)
+if (string.find(n, "complet") or string.find(n, "finish") or string.find(n, "repaired") or string.find(n, "done")) and desc.Value == true then
+return "Completed"
+end
+if (string.find(n, "broken") or string.find(n, "damag") or string.find(n, "regress")) and desc.Value == true then
+return "BrokenGen"
+end
+elseif desc:IsA("NumberValue") or desc:IsA("IntValue") then
+local n = string.lower(desc.Name)
+if (string.find(n, "progress") or string.find(n, "percent")) and desc.Value >= 100 then
+return "Completed"
+end
+elseif desc:IsA("StringValue") then
+local val = string.lower(desc.Value)
+if string.find(val, "complet") or string.find(val, "repaired") or string.find(val, "done") then
+return "Completed"
+end
+if string.find(val, "broken") or string.find(val, "damag") or string.find(val, "regress") then
+return "BrokenGen"
+end
+elseif desc:IsA("ParticleEmitter") or desc:IsA("Sparkles") or desc:IsA("Fire") then
+local n = string.lower(desc.Name)
+if desc.Enabled and (string.find(n, "spark") or string.find(n, "break") or string.find(n, "damag") or string.find(n, "regress")) then
+return "BrokenGen"
+end
+end
+end
+if hasPrompt and not anyPromptEnabled then
+return "Completed"
+end
+return "Generators"
+end
+-- Привязываем легкие слушатели изменений к генератору
+local function BindGeneratorListeners(target, data)
+local function updateState()
+if target and target.Parent then
+data.GenState = EvaluateGeneratorState(target)
+end
+end
+target.AttributeChanged:Connect(updateState)
+for _, desc in ipairs(target:GetDescendants()) do
+if desc:IsA("ValueBase") then
+desc.Changed:Connect(updateState)
+elseif desc:IsA("ProximityPrompt") or desc:IsA("ParticleEmitter") or desc:IsA("Sparkles") or desc:IsA("Fire") then
+desc:GetPropertyChangedSignal("Enabled"):Connect(updateState)
+end
+end
+updateState()
+end
 local function RegisterMapObject(obj)
+if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
 local category = ClassifyObject(obj)
 if not category then return end
 local target = (obj:IsA("BasePart") and obj.Parent:IsA("Model") and obj.Parent ~= workspace) and obj.Parent or obj
-if CachedMapObjects[target] then return end -- Уже в кэше
+if CachedMapObjects[target] then return end
+if Players:GetPlayerFromCharacter(target) then return end
+local rootPart = target:IsA("BasePart") and target or (target.PrimaryPart or target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart", true))
+if not rootPart then return end
 if target:IsA("Model") then
-local ok, cf, size = pcall(function()
-return target:GetBoundingBox()
-end)
-if ok and size and size.X < 40 and size.Y < 40 and size.Z < 40 then
-CachedMapObjects[target] = {
-Category = category,
-Position = cf.Position
-}
+local ok, _, size = pcall(function() return target:GetBoundingBox() end)
+if not (ok and size and size.X < 40 and size.Y < 40 and size.Z < 40) then
+return
 end
-else
-local pos = ComputeTargetPosition(target)
-if pos then
-CachedMapObjects[target] = {
-Category = category,
-Position = pos
-}
 end
+local isDynamic = (category == "Zombies" or category == "Traps")
+local entry = {
+Category = category,
+Position = rootPart.Position,
+RootPart = rootPart,
+Dynamic = isDynamic,
+GenState = "Generators",
+Humanoid = isDynamic and target:FindFirstChildOfClass("Humanoid") or nil
+}
+CachedMapObjects[target] = entry
+if category == "Generators" then
+BindGeneratorListeners(target, entry)
 end
 end
 local function ScanMap()
--- Очищаем удаленные объекты, сохраняя существующие
 for target, _ in pairs(CachedMapObjects) do
 if not target or not target.Parent then
 CachedMapObjects[target] = nil
@@ -621,23 +702,25 @@ end
 end
 local descendants = workspace:GetDescendants()
 for i = 1, #descendants do
-RegisterMapObject(descendants[i])
--- Разбиваем нагрузку на кадры, чтобы не было микрофризов при сканировании
-if i % 800 == 0 then
+local item = descendants[i]
+if item:IsA("Model") or item:IsA("BasePart") then
+RegisterMapObject(item)
+end
+if i % 1000 == 0 then
 task.wait()
 end
 end
 end
--- Отслеживаем загрузку новой карты без тяжелых циклов
+-- Мгновенный отсев мусора (частиц, звуков и т.д.) при добавлении объектов на карту
 workspace.DescendantAdded:Connect(function(obj)
 if not States.ESP then return end
+if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
 task.defer(function()
 if obj and obj.Parent then
 RegisterMapObject(obj)
 end
 end)
 end)
--- Включаем/выключаем Highlight без удаления объекта (не нагружает сборщик мусора)
 local function SetHighlightState(target, enabled, color)
 if not target or not target.Parent then return end
 local hl = target:FindFirstChild("VD_Highlight")
@@ -648,13 +731,19 @@ hl.Name = "VD_Highlight"
 hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 hl.FillTransparency = 0.65
 hl.OutlineTransparency = 0
-hl.Parent = target
-end
-hl.Enabled = true
 hl.FillColor = color
 hl.OutlineColor = color
+hl.Enabled = true
+hl.Parent = target
 else
-if hl then
+if not hl.Enabled then hl.Enabled = true end
+if hl.FillColor ~= color then
+hl.FillColor = color
+hl.OutlineColor = color
+end
+end
+else
+if hl and hl.Enabled then
 hl.Enabled = false
 end
 end
@@ -673,13 +762,14 @@ if hl then hl.Enabled = false end
 end
 end
 end
+local candidates = {} -- Переиспользуем таблицу, чтобы не нагружать сборщик мусора
 RefreshESP = function()
 if not States.ESP then
 DisableAllHighlights()
 return
 end
 local activeCount = 0
--- 1. Игроки (высокий приоритет)
+-- 1. Игроки
 for _, player in ipairs(Players:GetPlayers()) do
 if player ~= LocalPlayer and player.Character then
 local teamName = player.Team and string.lower(player.Team.Name) or ""
@@ -693,41 +783,66 @@ SetHighlightState(player.Character, false, cfg.Color)
 end
 end
 end
--- 2. Объекты карты (используем закэшированные координаты)
+-- 2. Объекты карты (без вызова GetDescendants в цикле)
 local originPos = nil
-if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-originPos = LocalPlayer.Character.HumanoidRootPart.Position
+local char = LocalPlayer.Character
+if char and char:FindFirstChild("HumanoidRootPart") then
+originPos = char.HumanoidRootPart.Position
 elseif Camera then
 originPos = Camera.CFrame.Position
 end
+table.clear(candidates)
 for target, data in pairs(CachedMapObjects) do
 if target and target.Parent then
-local cfg = ESPConfig[data.Category]
-local shouldShow = false
-if cfg.Enabled and activeCount < MaxActiveHighlights then
-if originPos and data.Position then
-local distance = (originPos - data.Position).Magnitude
-if distance <= MaxESPDistance then
-shouldShow = true
-end
+local activeCategory = (data.Category == "Generators") and data.GenState or data.Category
+local isDeadZombie = (activeCategory == "Zombies" and data.Humanoid and data.Humanoid.Health <= 0)
+if activeCategory == "Completed" or isDeadZombie then
+SetHighlightState(target, false, Color3.new(1, 1, 1))
 else
-shouldShow = true
+local cfg = ESPConfig[activeCategory]
+if cfg and cfg.Enabled then
+local currentPos = data.Position
+if data.Dynamic then
+local newPos = FastGetPosition(target, data.RootPart)
+if newPos then
+currentPos = newPos
+data.Position = newPos
 end
 end
-if shouldShow then
-SetHighlightState(target, true, cfg.Color)
-activeCount = activeCount + 1
+local dist = (originPos and currentPos) and (originPos - currentPos).Magnitude or 0
+if dist <= MaxESPDistance then
+candidates[#candidates + 1] = {
+Target = target,
+Distance = dist,
+Color = cfg.Color
+}
 else
 SetHighlightState(target, false, cfg.Color)
+end
+else
+SetHighlightState(target, false, Color3.new(1, 1, 1))
+end
 end
 else
 CachedMapObjects[target] = nil
 end
 end
+table.sort(candidates, function(a, b)
+return a.Distance < b.Distance
+end)
+for i = 1, #candidates do
+local item = candidates[i]
+if activeCount < MaxActiveHighlights then
+SetHighlightState(item.Target, true, item.Color)
+activeCount = activeCount + 1
+else
+SetHighlightState(item.Target, false, item.Color)
 end
--- Оптимизированный цикл обновления (раз в 0.35 сек, без тяжелых вычислений)
+end
+end
+-- Оптимальный цикл обновления (раз в 0.5 сек)
 task.spawn(function()
-while task.wait(0.35) do
+while task.wait(0.5) do
 if States.ESP then
 RefreshESP()
 end
